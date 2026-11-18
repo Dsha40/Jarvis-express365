@@ -173,3 +173,8 @@ justo lo contrario de la regla vigente.
   **no lo importa nadie**: no copiar ese patrón de allá.
 - Vite está en la **3**, varias mayores atrás. Actualizar no es urgente pero es
   deuda conocida.
+
+## Rama fix/tickets
+
+En esta rama rige un alcance restringido; leerlo antes de editar nada:
+@.claude/TICKETS.md
