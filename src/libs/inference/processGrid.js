@@ -31,6 +31,13 @@ const ORDER_TIME_TOLERANCE_S = 6;
 // verdad tardaba demasiado en aparecer. Dos es lo que cuesta poco más de un recorrido.
 const SIGHTINGS_TO_CONFIRM = 2;
 
+// WEAK_SIGHTINGS_TO_CONFIRM = «cuántas veces hay que ver una tarjeta SIN mesa NI rótulo» (pedido del usuario)
+// Antes no entraban nunca (isStrongReading), y se perdían pedidos de verdad: en la tablet real, los de
+// mostrador ya pagados llegan solo con '#93 · PAID', sin mesa, nombre ni «Take Out» (#91 se leyó 200 veces y
+// no salió en Mesas). Ahora entran, pero hay que verlos más veces que a uno con mesa: un número mal leído
+// (el fantasma «#205») sale una o dos lecturas, y uno de verdad sigue ahí con el cronómetro corriendo.
+const WEAK_SIGHTINGS_TO_CONFIRM = 5;
+
 
 // ABSENCES_TO_CLOSE = «ausencias para dar por cerrado»
 // Dos y no una: el modelo se deja tickets a menudo, y con una sola 'Listo en tablet' se llenaba de horas falsas.
@@ -84,6 +91,9 @@ function createEmptyRow(clave) {
         // true = se la ha visto lo suficiente como para pintarla. Hasta entonces la fila EXISTE
         // pero no sale en la parrilla: es una pista en prueba.
         confirmada: false,
+
+        // true = la fundó una lectura sin mesa ni rótulo: pide WEAK_SIGHTINGS_TO_CONFIRM para pintarse
+        fundadaFloja: false,
 
         // cómo estaba 'listo' la última vez que se le LEYÓ (null = todavía nunca)
         vistoAlgunaVez: false,
@@ -414,7 +424,7 @@ function countSighting(row) {
     const newRow = { ...row };
 
     newRow.vecesVista = row.vecesVista + 1;
-    newRow.confirmada = newRow.vecesVista >= SIGHTINGS_TO_CONFIRM;
+    newRow.confirmada = newRow.vecesVista >= (row.fundadaFloja ? WEAK_SIGHTINGS_TO_CONFIRM : SIGHTINGS_TO_CONFIRM);
 
     return newRow;
 }
@@ -806,13 +816,18 @@ function updateProcessGrid(grid, reading, context) {
         if (newGrid.alreadyThere.has(clave)) continue;
 
         //  EL SEGUNDO NIVEL: llegados aquí, esta lectura no ha casado con ninguna fila ni por su
-        //  clave ni por su hora. Solo se le deja fundar una si es FUERTE; si es floja, se tira.
-        if (!newGrid.rows.has(clave) && !isStrongReading(ticket)) continue;
+        //  clave ni por su hora. Una FUERTE funda fila; una floja (sin mesa ni rótulo) también, pero
+        //  marcada: tiene que verse WEAK_SIGHTINGS_TO_CONFIRM veces antes de pintarse.
+        // foundsWeak = «esta lectura floja va a fundar una fila nueva»
+        const foundsWeak = !newGrid.rows.has(clave) && !isStrongReading(ticket);
+
+        //  Pero ni floja funda sin número de ticket ni cronómetro legible: esa fila no mediría nada.
+        if (foundsWeak && (String(ticket?.ticket ?? '').trim() === '' || aSegundosDeCronometro(ticket?.tiempo) === null)) continue;
 
         seenNow.add(clave);
 
         // row = «la fila del pedido»: la que ya había, o una nueva
-        let row = newGrid.rows.get(clave) ?? createEmptyRow(clave);
+        let row = newGrid.rows.get(clave) ?? { ...createEmptyRow(clave), fundadaFloja: foundsWeak };
 
         // 5.2 Vuelve a aparecer: ¿el mismo pedido, u otro?
         if (wasClosedLongAgo(row, newGrid.readingsCount)) {
