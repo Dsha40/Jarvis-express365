@@ -63,5 +63,11 @@
     "tailwindcss": "^4.1.14",
     "vite": "^3.2.3",
     "vite-plugin-mkcert": "^1.17.4"
+  },
+  "allowScripts": {
+    "@tailwindcss/oxide@4.1.14": true,
+    "cwebp-bin@6.1.2": true,
+    "esbuild@0.15.18": true,
+    "sharp@0.34.1": true
   }
 }
