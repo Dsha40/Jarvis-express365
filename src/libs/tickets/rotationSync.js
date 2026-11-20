@@ -27,11 +27,17 @@
 
 import { createRecord, createProcess, isBlankRecord, isBlankProcess, OPEN_LISTS, RECORD_TIMES, PROCESS_FIELDS, TABLET_FIELDS, SHIFTS } from './tableRecords.js';
 import { DELAY_FIELDS, WARNING_FIELDS, PROCESS_DELAY_FIELDS, isObjectId } from './reportedDelay.js';
-import { caracasClock } from '../date_time/operationalDay.js';
+import { recordDay } from './staleRecords.js';
+import { localClock, localOperationalDay, isDayKey } from '../date_time/operationalDay.js';
 
 
 // LOCAL_ONLY = «lo de una rotación que no viaja»: las listas desplegadas, que son de quien mira, y su fila en la tabla
 const LOCAL_ONLY = [...OPEN_LISTS, 'row'];
+
+// UNSIGNED = «lo que viaja pero no es un cambio»: el día de la rotación. Se pone al nacer y no cambia (tableRecords.js),
+// así que no hace falta subirlo por sí solo. Y una API todavía sin desplegar devuelve el día calculado con la hora de
+// Caracas: si contara en la firma, cada eco suyo parecería un cambio y la rotación subiría y bajaría sin parar.
+const UNSIGNED = ['day'];
 
 // NOVELTY_FIELDS = «los campos de la rotación que apuntan a una novedad»: sus demoras y sus avisos
 const NOVELTY_FIELDS = [...Object.values(DELAY_FIELDS), ...Object.values(WARNING_FIELDS)];
@@ -48,12 +54,21 @@ const isTicketTable = (tableNumber) => String(tableNumber ?? '').trim().startsWi
 export const isSyncable = (record) => Boolean(record?.date) && !isBlankRecord(record) && String(record.tableNumber ?? '').trim() !== '';
 
 
-// shareable = «la rotación sin lo que no viaja»: sin las listas desplegadas, sin su fila y sin procesos en blanco
+// shareable = «la rotación sin lo que no viaja»: sin las listas desplegadas, sin su fila y sin procesos en blanco. Sin
+// su día tampoco (UNSIGNED): toSyncBody lo añade aparte.
 function shareable(record) {
     const copy = { ...record, process: record.process.filter(process => !isBlankProcess(process)) };
-    for (const field of LOCAL_ONLY) delete copy[field];
+    for (const field of [...LOCAL_ONLY, ...UNSIGNED]) delete copy[field];
     return copy;
 }
+
+// dayOfServer = «el día de una rotación que llega de la API», 'AAAA-MM-DD': el `day` de un cuerpo de la cola, o el
+// operationalDate que guardó la API (la medianoche UTC de ese día). null si no trae ninguno.
+const dayOfServer = (rotation) => {
+    if (isDayKey(rotation?.day)) return rotation.day;
+    const day = String(rotation?.operationalDate ?? '').slice(0, 10);
+    return isDayKey(day) ? day : null;
+};
 
 
 // syncSignature = «la firma de una rotación»: la misma si no cambió nada que se suba. Desplegar o plegar una lista
@@ -64,11 +79,16 @@ export const syncSignature = (record) => JSON.stringify(shareable(record));
 // toSyncBody = «el cuerpo de PUT /rotation/client=<id>»: la rotación entera, con su local, su estado ('open' o
 // 'closed') y cuándo cambió en el equipo (changedAt, en milisegundos). Procesos y toques llevan su id como
 // `clientId`, para que vuelvan tal cual al cargarlos desde la API. Lo que la API no tiene en su esquema lo descarta.
+// Lleva también los dos días con la hora de Windows: el de la rotación (`day`, el de su nacimiento) y el de cuando
+// cambió (`today`). La API la guarda en ESE día, sin recalcularlo con la hora de Caracas, y la marca de abandonada
+// sale de comparar los dos (una cerrada después de su día).
 export function toSyncBody(record, establishmentId, status, changedAt) {
     const data = shareable(record);
     return {
         ...data,
         date: new Date(record.date).toISOString(),
+        day: recordDay(record),
+        today: localOperationalDay(new Date(changedAt)),
         establishment: establishmentId,
         clientId: record.id,
         status,
@@ -86,6 +106,7 @@ export function fromServerRotation(rotation) {
     const record = createRecord({
         id: String(rotation.clientId),
         date: new Date(rotation.date),
+        day: dayOfServer(rotation),
         tableNumber: String(rotation.tableNumber ?? ''),
         shift: SHIFTS.includes(rotation.shift) ? rotation.shift : null,
     });
@@ -120,12 +141,13 @@ export function fromServerRotation(rotation) {
 
 
 // placeRemote = «poner en Mesas una rotación que llega de la API»: en su sitio si ya está (con las listas como las
-// tenía quien mira), o en la primera fila en blanco después de las que se usan, o al final.
+// tenía quien mira, y con el día con que nació aquí: ese no lo cambia nadie), o en la primera fila en blanco después
+// de las que se usan, o al final.
 export function placeRemote(records, incoming) {
     const index = records.findIndex(record => record.id === incoming.id);
     if (index !== -1) {
         const current = records[index];
-        const merged = { ...incoming, processesOpen: current.processesOpen === true, touchesOpen: current.touchesOpen === true };
+        const merged = { ...incoming, day: current.day ?? incoming.day, processesOpen: current.processesOpen === true, touchesOpen: current.touchesOpen === true };
         return records.map((record, position) => (position === index ? merged : record));
     }
 
@@ -240,7 +262,7 @@ export function authorshipTitle(authorship, pending = false) {
     const parts = [];
     if (authorship?.createdBy) parts.push(`Creó ${authorship.createdBy}`);
     if (authorship?.updatedBy) {
-        const time = authorship.changedAt ? caracasClock(authorship.changedAt) : '';
+        const time = authorship.changedAt ? localClock(authorship.changedAt) : '';
         parts.push(`último cambio de ${authorship.updatedBy}${time ? ` a las ${time}` : ''}`);
     }
     if (pending) parts.push(parts.length > 0 ? 'con cambios sin subir todavía' : 'Todavía sin subir al servidor');

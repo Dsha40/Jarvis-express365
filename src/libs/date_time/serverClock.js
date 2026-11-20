@@ -1,7 +1,11 @@
 /*  LA HORA DEL SERVIDOR
  *
- *  Los INSTANTES de Mesas —la fecha de cada rotación, qué día operativo es hoy, cuándo cambió algo— no salen del reloj
- *  del equipo sino de serverNow(): ese reloj corregido con la hora del servidor.
+ *  serverNow() es el reloj del equipo corregido con la hora del servidor. Hoy lo usa solo el día de las novedades y de
+ *  los bonos (operationalDay, en operationalDay.js), que tiene que coincidir con el que cuenta la API.
+ *
+ *  MESAS YA NO LO USA (pedido del usuario, 2026-11-14): la rotación trabaja con la hora de WINDOWS, tal cual, porque
+ *  hay equipos en zonas horarias distintas y la hora que vale es la del computador donde corre la aplicación
+ *  (localOperationalDay). Lo de abajo cuenta por qué se hizo esto, en su día, para Mesas.
  *
  *  POR QUÉ. Un PC con la zona horaria mal puesta —la de Madrid, UTC+1, la que traen los Windows instalados en español
  *  de España— y la hora cambiada a mano para que enseñe la de Venezuela se ve bien, pero por dentro va 5 horas

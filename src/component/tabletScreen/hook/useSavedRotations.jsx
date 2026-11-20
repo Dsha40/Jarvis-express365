@@ -1,8 +1,7 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { ReactReduxContext } from 'react-redux';
 import { getRotationsByEstablishment, saveRotation, updateRotation, addRotationTouch, deleteRotationTouch } from '../../../libs/fetch_data/rotationFetching.js';
-import { operationalDay, caracasClock } from '../../../libs/date_time/operationalDay.js';
-import { serverNow } from '../../../libs/date_time/serverClock.js';
+import { localOperationalDay, localClock } from '../../../libs/date_time/operationalDay.js';
 import { recoveredRotation } from '../../../libs/tickets/recoveredRotation.js';
 import { exportCustomerServiceWorkbook } from '../../../libs/export/customerServiceWorkbook.js';
 import { findSavedTicket } from '../../../libs/tickets/savedTickets.js';
@@ -73,8 +72,8 @@ const dayOf = (rotation) => String(rotation?.operationalDate ?? '').slice(0, 10)
 // byStart = «por la hora en que empezó», como las ordena el GET
 const byStart = (one, other) => new Date(one.date) - new Date(other.date);
 
-// clock = «una fecha como hora HH:MM», en Caracas: la misma en cualquier equipo (caracasClock)
-const clock = caracasClock;
+// clock = «una fecha como hora HH:MM», con la hora de Windows: la que enseña el reloj del equipo (localClock)
+const clock = localClock;
 
 
 // putSaved = «poner en la lista una rotación que llega en vivo»
@@ -138,7 +137,7 @@ function useSavedRotations({ establishmentName, attention, cleaning, store }) {
         if (!establishmentName) return;
 
         const request = ++requestRef.current;
-        const day = operationalDay();
+        const day = localOperationalDay();
         setSaved(current => ({ ...current, status: 'loading', day }));
 
         getRotationsByEstablishment(establishmentName, day)
@@ -159,7 +158,7 @@ function useSavedRotations({ establishmentName, attention, cleaning, store }) {
     useEffect(() => {
         if (!saved.day) return undefined;
 
-        const timer = setInterval(() => { if (operationalDay() !== saved.day) loadSaved(); }, DAY_CHECK_MS);
+        const timer = setInterval(() => { if (localOperationalDay() !== saved.day) loadSaved(); }, DAY_CHECK_MS);
         return () => clearInterval(timer);
     }, [saved.day, loadSaved]);
 
@@ -228,7 +227,7 @@ function useSavedRotations({ establishmentName, attention, cleaning, store }) {
 
         setEditNotice('');
         const hourTouch = getCurrentTime();
-        addRotationTouch(rotationId, { ref: manager.ref, name: manager.name, hourTouch, hourTouchFinish: randomTouchFinish(hourTouch), createdAt: serverNow().toISOString(), recovered: true })
+        addRotationTouch(rotationId, { ref: manager.ref, name: manager.name, hourTouch, hourTouchFinish: randomTouchFinish(hourTouch), createdAt: new Date().toISOString(), recovered: true })
             .then(updated => setSaved(current => putSaved(current, updated, 'put')))
             .catch(failed);
     }, [failed]);
@@ -256,7 +255,7 @@ function useSavedRotations({ establishmentName, attention, cleaning, store }) {
     const addRecovered = useCallback((fields, establishmentId) => {
         if (!establishmentId) return Promise.reject(new Error('Elige primero el local'));
 
-        const body = recoveredRotation({ ...fields, day: savedRef.current.day || operationalDay() });
+        const body = recoveredRotation({ ...fields, day: savedRef.current.day || localOperationalDay() });
         return saveRotation({ ...body, establishment: establishmentId })
             .then(rotation => {
                 setSaved(current => keepSaved(current, rotation));

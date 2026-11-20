@@ -47,8 +47,7 @@
 import { esMesaDeVerdad } from './claveDeTicket.js';
 import { DELAY_FIELDS, WARNING_FIELDS, PROCESS_DELAY_FIELDS, isObjectId } from './reportedDelay.js';
 import { isStaleRecord } from './staleRecords.js';
-import { operationalDay } from '../date_time/operationalDay.js';
-import { serverNow } from '../date_time/serverClock.js';
+import { localOperationalDay, isDayKey } from '../date_time/operationalDay.js';
 import { createDishTypes } from './dishTypes.js';
 
 
@@ -124,7 +123,10 @@ export function createProcess(fields = {}) {
 export function createRecord(fields = {}) {
     return {
         id: crypto.randomUUID(),
-        date: null,
+        date: null,     //  cuándo nació: la primera vez que se le escribió algo, con el reloj de Windows
+        day: null,      //  el día operativo en que nació, 'AAAA-MM-DD', con la hora de Windows (bornAt). Se queda FIJO:
+                        //  es su día aunque después cambie el reloj o la zona horaria, y es el que guarda la API.
+                        //  null en una fila en blanco, y en las que nacieron antes de existir el campo (recordDay).
         tableNumber: '',
         takeOut: false,
         shift: null,
@@ -243,11 +245,38 @@ function firstTrailingBlank(records) {
 
 
 
+// bornAt = «con qué fecha y qué día nace una rotación»: { date, day } si todavía no nació, con el reloj de Windows
+// (localOperationalDay); {} si ya nació, porque su fecha y su día no se tocan nunca más. Una fila EN BLANCO no ha
+// nacido aunque arrastre la fecha de lo que tuvo (ver withBirth).
+export const bornAt = (record, now = new Date()) => (record?.date && !isBlankRecord(record) ? {} : { date: now, day: localOperationalDay(now) });
+
+
+/*  withBirth = «la rotación que queda después de escribirle, con su fecha y su día al día»
+ *
+ *  · Si ya había nacido (tenía fecha y algo escrito), se queda con su fecha y su día: no se tocan nunca más.
+ *  · Si estaba en blanco y ahora tiene algo, NACE AHORA, con el día de hoy.
+ *  · Si se queda en blanco (se borró a mano todo lo escrito), deja de tener fecha y día.
+ *
+ *  POR QUÉ (reporte del usuario, 2026-11-20: «cuando las estoy creando hoy se ponen como de días anteriores»).
+ *  Una fila que se quedaba en blanco al borrarle lo escrito conservaba la fecha de lo que tuvo. Jarvis se queda
+ *  abierto días: lo que se escribía en esa fila después heredaba aquel día y saltaba al momento, recién creada, al
+ *  bloque de «días anteriores», bloqueada y sin hora de Ocupa con que guardarla.
+ *
+ *  @param {object} previous  la rotación antes de escribirle
+ *  @param {object} next      la rotación ya escrita (con la fecha y el día que arrastra de 'previous')
+ *  @param {Date}   now       ahora
+ */
+export function withBirth(previous, next, now = new Date()) {
+    if (isBlankRecord(next)) return next.date || next.day ? { ...next, date: null, day: null } : next;
+    return { ...next, ...bornAt(previous, now) };
+}
+
+
 // setRecordField = «anotar un dato de una mesa»
-// La mesa recibe su fecha la primera vez que se le escribe algo: hasta entonces era una fila en blanco.
-// Al escribir la mesa se decide también si es para llevar: con '#' delante, sí (withTable), y entonces su
+// La mesa recibe su fecha y su día la primera vez que se le escribe algo (withBirth): hasta entonces era una fila en
+// blanco. Al escribir la mesa se decide también si es para llevar: con '#' delante, sí (withTable), y entonces su
 // ticket tiene su proceso (withTicketProcess).
-export function setRecordField(records, recordId, field, value, now = serverNow()) {
+export function setRecordField(records, recordId, field, value, now = new Date()) {
 
     const index = records.findIndex(record => record.id === recordId);
     if (index === -1 || records[index][field] === value) return records;
@@ -257,14 +286,14 @@ export function setRecordField(records, recordId, field, value, now = serverNow(
         : { ...records[index], [field]: value };
 
     const next = [...records];
-    next[index] = { ...record, date: records[index].date ?? now };
+    next[index] = withBirth(records[index], record, now);
     return next;
 }
 
 
 // setProcessField = «anotar un dato de un proceso»: su tipo de plato o una de sus horas
 // Si es una de las que lee la IA, queda marcada como corregida a mano: la IA ya no la vuelve a pisar.
-export function setProcessField(records, recordId, processId, field, value, now = serverNow()) {
+export function setProcessField(records, recordId, processId, field, value, now = new Date()) {
 
     const recordIndex = records.findIndex(record => record.id === recordId);
     if (recordIndex === -1) return records;
@@ -282,7 +311,7 @@ export function setProcessField(records, recordId, processId, field, value, now 
     lines[processIndex] = { ...process, [field]: value, edited: fromTabletByHand ? [...process.edited, field] : process.edited };
 
     const next = [...records];
-    next[recordIndex] = { ...record, process: lines, date: record.date ?? now };
+    next[recordIndex] = withBirth(record, { ...record, process: lines }, now);
     return next;
 }
 
@@ -317,14 +346,14 @@ export function setProcessField(records, recordId, processId, field, value, now 
  *  dishTypeOf (opcional) da el tipo de plato de un pedido: el de la carta del local (createDishTypes, en
  *  dishTypes.js). Sin él, el de la lista de siempre.
  */
-export function applyTabletOrders(records, orders, now = serverNow(), acceptNewOrder = () => true, dishTypeOf = FIXED_DISH_TYPE) {
+export function applyTabletOrders(records, orders, now = new Date(), acceptNewOrder = () => true, dishTypeOf = FIXED_DISH_TYPE) {
 
     if (!orders || orders.length === 0) return records;
 
-    // isOpenToday = «la rotación sigue abierta para recibir pedidos»: no se ha desocupado y es de HOY. Una de un día
-    // operativo anterior está bloqueada (staleRecords.js): sin esto, una mesa 30 abandonada hace días se tragaba
-    // los pedidos de hoy de la mesa 30.
-    const today = operationalDay(now);
+    // isOpenToday = «la rotación sigue abierta para recibir pedidos»: no se ha desocupado y es de HOY (el día de
+    // Windows). Una de un día operativo anterior está bloqueada (staleRecords.js): sin esto, una mesa 30 abandonada
+    // hace días se tragaba los pedidos de hoy de la mesa 30.
+    const today = localOperationalDay(now);
     const isOpenToday = (record) => isEmpty(record.breakUp) && !isStaleRecord(record, today);
 
     // next = «la lista que se devuelve». Se copia la primera vez que algo cambia, no antes.
@@ -412,7 +441,7 @@ export function applyTabletOrders(records, orders, now = serverNow(), acceptNewO
             continue;
         }
 
-        const record = withTable(createRecord({ date: now, process: [process] }), tableNumber);
+        const record = withTable(createRecord({ ...bornAt(null, now), process: [process] }), tableNumber);
         if (next === records) next = [...records];
         next.splice(firstTrailingBlank(next), 0, record);
         tableOf.set(order.clave, record.id);
@@ -533,7 +562,7 @@ const storageKey = (localId) => (localId ? `${STORAGE_PREFIX}:${localId}` : '');
 // NUNCA lanza: sin nada guardado, o con el almacenamiento bloqueado, devuelve una lista vacía.
 // Vuelven TODAS, también las de días anteriores: antes, las de más de 16 horas desaparecían sin guardarse. Ahora
 // Mesas las bloquea y las sube a un bloque aparte, hasta que alguien las guarde o las elimine (staleRecords.js).
-export function readRecords(localId, now = serverNow()) {
+export function readRecords(localId, now = new Date()) {
 
     const key = storageKey(localId);
     if (!key) return [];
@@ -634,6 +663,10 @@ function reviveRecord(saved, now) {
 
     const date = new Date(saved?.date ?? now);
     record.date = Number.isFinite(date.getTime()) ? date : now;
+
+    //  El día en que nació, tal cual se guardó: no se vuelve a calcular. Las de antes de existir el campo no lo
+    //  tienen, y conservan el día que tenían (recordDay, en staleRecords.js).
+    record.day = isDayKey(saved?.day) ? saved.day : null;
 
     record.process = (Array.isArray(saved?.process) ? saved.process : []).map(reviveProcess);
 

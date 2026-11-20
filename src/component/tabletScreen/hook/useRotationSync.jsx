@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { syncRotation, removeOpenRotation, getOpenRotations, saveRotation } from '../../../libs/fetch_data/rotationFetching.js';
 import { onRotationSync } from '../../../libs/socket/rotationEvents.js';
 import { onJarvisReconnect } from '../../../libs/socket/noveltyEvents.js';
-import { serverNow } from '../../../libs/date_time/serverClock.js';
 import {
     planChanges, toSyncBody, fromServerRotation, placeRemote, clearRemote, syncSignature, remoteAction,
     queueUpsert, settle, isClosing, authorshipOf, readOutbox, writeOutbox,
@@ -252,7 +251,7 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
     const notify = useCallback((records) => {
         if (pausedRef.current || !localRef.current) return;
 
-        const { outbox, known } = planChanges(records, knownRef.current, outboxRef.current, localRef.current, serverNow().getTime());
+        const { outbox, known } = planChanges(records, knownRef.current, outboxRef.current, localRef.current, Date.now());
         knownRef.current = known;
         if (outbox === outboxRef.current) return;
 
@@ -265,7 +264,7 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
     const close = useCallback((record) => {
         if (!localRef.current) return false;
 
-        const now = serverNow().getTime();
+        const now = Date.now();
         knownRef.current.delete(record.id);
         saveOutbox(queueUpsert(outboxRef.current, toSyncBody(record, localRef.current, 'closed', now), now));
         flushRef.current();

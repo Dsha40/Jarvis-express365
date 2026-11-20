@@ -183,8 +183,8 @@ function RegisterTable({ records, liveOrders, attentionLimit, cleaningLimit, att
                     )
                 }
 
-                {/*  LAS DE DÍAS ANTERIORES, arriba y aparte: bloqueadas, solo guardar o eliminar  */}
-                {stale && <RegisterStaleBlock stale={stale} grid={grid} hasManagers={managers.length > 0} />}
+                {/*  LAS DE DÍAS ANTERIORES, arriba y aparte: bloqueadas, solo guardar o eliminar (y ver sus toques)  */}
+                {stale && <RegisterStaleBlock stale={stale} grid={grid} managers={managers} />}
 
                 {/*  LO BUSCADO O LO MOSTRADO NO DEJA NINGUNA FILA: se dice, con el botón para volver a verlas todas  */}
                 {

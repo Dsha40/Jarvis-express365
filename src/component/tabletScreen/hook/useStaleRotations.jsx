@@ -14,6 +14,8 @@ import { isStaleRecord, recordDay, staleSaveProblem, dayText, daysBetween } from
  *                 limpia ya, también sin internet. La API la guarda en SU día operativo y la marca como abandonada
  *                 ('abandoned'); cuando contesta, entra en Registros. Si no la acepta, vuelve a Mesas.
  *                 Una a la que le falta la mesa o la hora de Ocupa no se puede guardar: ya no se puede escribir.
+ *      traer a hoy  la que no se puede guardar por eso vuelve a nacer hoy y deja de estar bloqueada, para
+ *                 completarla (pedido del usuario, 2026-11-20: «no quisiera perderlas»). Antes solo se podía eliminar.
  *      eliminar   su fila de Mesas queda en blanco, sin guardarse. Se pregunta antes: no se puede deshacer.
  *
  *  Se pregunta con el BoxModal de la aplicación; en la ventana flotante, que no monta Redux, con window.confirm.
@@ -29,8 +31,9 @@ const plural = (count) => (count === 1 ? 'la rotación' : `las ${count} rotacion
  *  @param {string}   establishmentId  el _id del local, para guardarlas
  *  @param {function} closeRecord      guardarla, como el disquete (store.closeRecord): false si no se pudo
  *  @param {function} clearRecord      dejar una fila en blanco (store.clearRecord)
+ *  @param {function} bringToToday     traer a hoy una que no se puede guardar (store.bringToToday)
  */
-export default function useStaleRotations({ records, today, establishmentId, closeRecord, clearRecord }) {
+export default function useStaleRotations({ records, today, establishmentId, closeRecord, clearRecord, bringToToday }) {
 
     const reduxStore = useContext(ReactReduxContext)?.store ?? null;
 
@@ -68,9 +71,17 @@ export default function useStaleRotations({ records, today, establishmentId, clo
 
         setNotice([
             failed > 0 ? `${failed === 1 ? 'Una no se pudo guardar' : `${failed} no se pudieron guardar`}: falta el local` : '',
-            skipped > 0 ? `${skipped === 1 ? 'Una no se pudo guardar' : `${skipped} no se pudieron guardar`}: les falta la mesa o la hora de Ocupa, solo se pueden eliminar` : '',
+            skipped > 0 ? `${skipped === 1 ? 'Una no se pudo guardar' : `${skipped} no se pudieron guardar`}: les falta la mesa o la hora de Ocupa. Tráelas a hoy para completarlas` : '',
         ].filter(Boolean).join(' · '));
     }, [establishmentId, closeRecord]);
+
+    // bringOne = «traer a hoy una rotación que no se puede guardar en su día», para completarla. A una que sí se puede
+    // guardar no: se guarda en su día, que es donde pasó.
+    const bringOne = useCallback((record) => {
+        if (!bringToToday || !staleSaveProblem(record)) return;
+        setNotice('');
+        bringToToday(record.id);
+    }, [bringToToday]);
 
     // remove = «quitar estas rotaciones de Mesas, sin guardarlas»
     const remove = useCallback((list) => {
@@ -113,7 +124,7 @@ export default function useStaleRotations({ records, today, establishmentId, clo
 
 
     return useMemo(
-        () => ({ records: stale, ids, days, today, busy, notice, saveOne, saveAll, deleteOne, deleteAll }),
-        [stale, ids, days, today, busy, notice, saveOne, saveAll, deleteOne, deleteAll]
+        () => ({ records: stale, ids, days, today, busy, notice, saveOne, saveAll, bringOne, deleteOne, deleteAll }),
+        [stale, ids, days, today, busy, notice, saveOne, saveAll, bringOne, deleteOne, deleteAll]
     );
 }

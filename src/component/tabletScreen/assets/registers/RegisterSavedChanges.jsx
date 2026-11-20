@@ -1,5 +1,5 @@
 import { COLUMNS, PROCESS_COLUMNS } from './columns.js';
-import { caracasClock } from '../../../../libs/date_time/operationalDay.js';
+import { localClock } from '../../../../libs/date_time/operationalDay.js';
 import SavedPerson from './SavedPerson.jsx';
 
 
@@ -20,8 +20,8 @@ const LABELS = Object.fromEntries(
     [...COLUMNS, ...PROCESS_COLUMNS, { id: 'hourTouch', title: 'Hora del toque' }, { id: 'touch', title: 'Toque' }].map(column => [column.id, column.title])
 );
 
-// clock = «una fecha como hora HH:MM», en Caracas: la misma en cualquier equipo (caracasClock)
-const clock = caracasClock;
+// clock = «una fecha como hora HH:MM», con la hora de Windows: la que enseña el reloj del equipo (localClock)
+const clock = localClock;
 
 // shown = «un valor como se enseña»: '-' si estaba vacío
 const shown = (value) => (value === '' || value == null ? '-' : String(value));

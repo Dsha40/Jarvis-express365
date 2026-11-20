@@ -1,25 +1,52 @@
 /*  EL DÍA OPERATIVO
  *
- *  La jornada de monitoreo va de las 08:00 a las 07:00 del día siguiente, en America/Caracas: una mesa
- *  de las 02:00 es del turno del día ANTERIOR. Es la misma regla que usa api_jarvis365
- *  (operationalDateOf, en dvrFailure.lib.ts) para guardar y para pedir por fechas, y por eso el día se
- *  calcula aquí igual: si no coincidieran, «las rotaciones de hoy» saldrían de otro día cerca de la
- *  medianoche.
+ *  La jornada de monitoreo va de las 08:00 a las 07:00 del día siguiente: una mesa de las 02:00 es del turno del
+ *  día ANTERIOR. Hay dos formas de saber qué día es, y cada parte de la app usa la suya:
  *
- *  «Ahora» es serverNow() (serverClock.js), la hora del equipo corregida con la del servidor: con el
- *  reloj del equipo mal puesto, el día cambiaba a la 1:00 pm de su pantalla en vez de a las 08:00.
+ *      localOperationalDay   LA ROTACIÓN (Mesas y Registros): la fecha y la hora de WINDOWS, en la zona horaria
+ *                            del equipo y sin corregir nada (pedido del usuario, 2026-11-14: «la rotación trabaja
+ *                            con la hora del computador donde corre la aplicación»). Cada rotación se queda con
+ *                            el día en que nació (tableRecords.js) y se lo manda a la API, que lo guarda tal cual.
+ *
+ *      operationalDay        LAS NOVEDADES Y LOS BONOS: en America/Caracas y con la hora del servidor
+ *                            (serverClock.js), como los cuenta api_jarvis365 (operationalDateOf, en
+ *                            dvrFailure.lib.ts). Así «tus novedades de hoy» son las mismas aquí y en la API.
  */
 import { serverNow } from './serverClock.js';
 
 
-// TIME_ZONE = «la zona en la que se define la jornada»
+// TIME_ZONE = «la zona en la que la API define la jornada de las novedades»
 const TIME_ZONE = 'America/Caracas';
 
 // OPENS_AT = «la hora a la que abre la jornada»
 const OPENS_AT = 8;
 
+// twoDigits = «un número con dos cifras»: 7 → '07'
+const twoDigits = (value) => String(value).padStart(2, '0');
 
-// operationalDay = «el día operativo de un instante», como 'AAAA-MM-DD'
+
+// localOperationalDay = «el día operativo de un instante, con la hora de WINDOWS», como 'AAAA-MM-DD'
+// La fecha y la hora que enseña el equipo, en su zona horaria. Antes de las 08:00 de su reloj es el día anterior.
+// Recibe: now (un Date; por defecto, ahora).
+export function localOperationalDay(now = new Date()) {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (now.getHours() < OPENS_AT) day.setDate(day.getDate() - 1);
+    return `${day.getFullYear()}-${twoDigits(day.getMonth() + 1)}-${twoDigits(day.getDate())}`;
+}
+
+
+// DAY_KEY = «la forma de un día»: 'AAAA-MM-DD'
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+// isDayKey = «es un día 'AAAA-MM-DD' que existe»: '2026-02-30' tiene la forma, pero no existe
+export const isDayKey = (value) => {
+    if (typeof value !== 'string' || !DAY_KEY.test(value)) return false;
+    const date = new Date(`${value}T00:00:00.000Z`);
+    return Number.isFinite(date.getTime()) && date.toISOString().startsWith(value);
+};
+
+
+// operationalDay = «el día operativo de un instante en Caracas», como 'AAAA-MM-DD': el de las novedades y los bonos
 // Recibe: now (un Date; por defecto, ahora con la hora del servidor).
 export function operationalDay(now = serverNow()) {
 
@@ -38,22 +65,16 @@ export function operationalDay(now = serverNow()) {
 }
 
 
-// CARACAS_OFFSET_HOURS = «cuántas horas va Caracas por detrás de UTC»: cuatro, todo el año (no tiene horario de verano)
-const CARACAS_OFFSET_HOURS = 4;
-
-
-// atOperationalTime = «el instante de una hora 'HH:MM:SS' de un día operativo», en Caracas
+// atOperationalTime = «el instante de una hora 'HH:MM:SS' de un día operativo», con la hora de WINDOWS
 // De las 08:00 en adelante es ese día civil; antes de las 08:00, la madrugada del día siguiente: las 02:00 del
-// día operativo '2026-10-16' son las 02:00 del 17. Así, operationalDay() del resultado es siempre 'day'.
+// día operativo '2026-10-16' son las 02:00 del 17. Así, localOperationalDay() del resultado es siempre 'day'.
 // Recibe: day ('AAAA-MM-DD') y time ('HH:MM:SS'; sin segundos también vale).
 export function atOperationalTime(day, time) {
+    const [year, month, date] = String(day).split('-').map(Number);
     const [hours = 0, minutes = 0, seconds = 0] = String(time ?? '').split(':').map(Number);
 
-    const instant = new Date(`${day}T00:00:00.000Z`);
-    if (hours < OPENS_AT) instant.setUTCDate(instant.getUTCDate() + 1);
-
-    //  setUTCHours reparte lo que pase de 24 en el día siguiente: las 22:00 de Caracas son las 02:00 UTC
-    instant.setUTCHours(hours + CARACAS_OFFSET_HOURS, minutes || 0, seconds || 0, 0);
+    const instant = new Date(year, month - 1, date, hours || 0, minutes || 0, seconds || 0, 0);
+    if (hours < OPENS_AT) instant.setDate(instant.getDate() + 1);
     return instant;
 }
 
@@ -89,12 +110,10 @@ export const operationalDayLabel = (day) =>
     new Date(`${day}T12:00:00Z`).toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
 
 
-// CLOCK_FORMAT = «una hora HH:MM, en Caracas»
-const CLOCK_FORMAT = new Intl.DateTimeFormat('es', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: TIME_ZONE });
-
-// caracasClock = «la hora HH:MM de un instante, en Caracas»: '14:05'. La misma en cualquier equipo, también en uno con
-// la zona horaria mal puesta (serverClock.js), que con la de él enseñaba la hora corrida. '' si no es una fecha.
-export const caracasClock = (date) => {
-    const instant = new Date(date);
-    return Number.isFinite(instant.getTime()) ? CLOCK_FORMAT.format(instant) : '';
+// localClock = «la hora HH:MM de un instante, con la de WINDOWS»: '14:05', la misma que enseña el reloj del equipo.
+// Con getHours y no con un Intl guardado: si alguien cambia la zona horaria con la app abierta, sigue el cambio.
+// '' si no es una fecha.
+export const localClock = (date) => {
+    const instant = new Date(date ?? '');
+    return Number.isFinite(instant.getTime()) ? `${twoDigits(instant.getHours())}:${twoDigits(instant.getMinutes())}` : '';
 };
