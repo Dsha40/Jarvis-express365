@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import './ConfigIA.css';
 import { normalizeBaseUrl, readAiSettings, saveAiSettings, clearAiSettings, maskApiKey } from '../../../libs/inference/aiSettings.js';
 import { checkAiServer } from '../../../libs/inference/aiServer.js';
+import { useModelosAlAbrir } from './useModelosAlAbrir.js';
 
 
 
@@ -473,6 +474,11 @@ function ConfigIA() {
     const checkServer = () => askServer();
 
 
+    //  Al ir a elegir modelo se le pregunta al servidor cuáles tiene AHORA, no los de la última
+    //  consulta (useModelosAlAbrir.js).
+    const modelosAlAbrir = useModelosAlAbrir({ url: normalizedUrl, checking, askServer });
+
+
     //  Al abrir el menú se pide la lista de modelos de la dirección guardada, para poder elegir
     //  uno sin tener que darle antes a «Probar conexión». En silencio: solo habla si falla.
     useEffect(() => {
@@ -586,9 +592,12 @@ function ConfigIA() {
 
                 <select
                     id='cia-modelo'
+                    ref={modelosAlAbrir.selectRef}
                     className='cia-input cia-select'
                     value={modelChoice}
                     onChange={event => setModelChoice(event.target.value)}
+                    onMouseDown={modelosAlAbrir.onMouseDown}
+                    onFocus={modelosAlAbrir.onFocus}
                     disabled={checking}
                 >
                     <option value=''>El que elija el servidor (automático)</option>
@@ -617,7 +626,7 @@ function ConfigIA() {
                     checking
                         ? <p className='cia-pista cia-pista--flojo'>preguntando qué modelos hay…</p>
                         : !listIsForThisUrl
-                            ? <p className='cia-pista cia-pista--flojo'>dale a «Probar conexión» para ver los modelos de esta dirección</p>
+                            ? <p className='cia-pista cia-pista--flojo'>abre la lista y se le preguntará a esta dirección qué modelos tiene</p>
                             : models.length === 0
                                 ? <p className='cia-pista cia-pista--ojo'>ese servidor no tiene ningún modelo cargado</p>
                                 : !reportsVision
