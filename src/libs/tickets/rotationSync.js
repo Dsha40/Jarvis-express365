@@ -14,9 +14,11 @@
  *      outbox = { [id de la rotación]: { kind: 'upsert', body, at } | { kind: 'remove', at } }
  *               at = cuándo entró, en milisegundos: con él se sabe si lo que se acaba de subir sigue siendo lo último
  *
- *  LA MÁS NUEVA GANA. Cada subida lleva cuándo cambió en el equipo (clientUpdatedAt) y la API se queda con la más
- *  nueva: una subida atrasada no pisa una posterior. Lo que llega de otro equipo entra en Mesas salvo que aquí
- *  haya cambios sin subir de esa misma rotación: entonces mandan los de aquí, y la API decidirá.
+ *  LA MÁS NUEVA GANA, PERO SE JUNTA. Cada subida lleva cuándo cambió en el equipo (clientUpdatedAt) y la API se queda
+ *  con la más nueva: una subida atrasada no pisa una posterior. Cada subida va después de la última versión que se
+ *  sabe de esa rotación (stampAfter), aunque el reloj de este equipo vaya detrás del de otro. Lo que llega de otro
+ *  equipo se JUNTA campo a campo con lo de aquí (mergeRemote): lo que aquí se cambió y no se ha subido se queda, y lo
+ *  que cambió allí entra. Un eco más viejo que lo que ya se sabe no se mira.
  *
  *  Para no subir dos veces lo mismo, se recuerda la FIRMA de lo último que se subió o llegó de cada rotación
  *  (syncSignature): solo se sube la que cambió de verdad, no la que solo se desplegó.
@@ -185,10 +187,91 @@ export function settle(outbox, recordId, at) {
 }
 
 
+//  ── LA HORA DE CADA SUBIDA ─────────────────────────────────────────────────────────────
+//  La API se queda con la subida más nueva según clientUpdatedAt, que pone el reloj de CADA equipo. Si otro equipo del
+//  local va adelantado, todo lo de este llegaría «atrasado» ('stale') y se perdería. Por eso cada subida lleva una hora
+//  posterior a la última que se sabe de esa rotación en la API (su «suelo»), aunque el reloj de aquí vaya detrás.
+
+// stampOf = «cuándo cambió una rotación de la API», en milisegundos (su clientUpdatedAt); -Infinity si no lo trae
+export const stampOf = (rotation) => {
+    const time = new Date(rotation?.clientUpdatedAt ?? NaN).getTime();
+    return Number.isFinite(time) ? time : -Infinity;
+};
+
+// stampAfter = «la hora de una subida»: ahora, o justo después del suelo de esa rotación si el reloj de aquí va detrás
+export const stampAfter = (now, floor) => (Number.isFinite(floor) && floor >= now ? floor + 1 : now);
+
+
+//  ── JUNTAR LO QUE LLEGA CON LO DE AQUÍ ─────────────────────────────────────────────────
+//  Pedido del usuario: «cuando quiero establecer el tiempo en Desocupa o Limpieza se borra a los segundos». Pasaba
+//  con dos Mesas del mismo local abiertas (dos equipos, o dos ventanas): la API reemplaza la rotación ENTERA con cada
+//  subida, así que la otra, que no tenía la hora recién escrita, la borraba al subir lo suyo (la tablet sube cada
+//  pocos segundos), y su eco la borraba también aquí. Ahora lo que llega se junta CAMPO A CAMPO contra lo último
+//  acordado con la API (la «base»): de cada campo vale el de aquí si aquí cambió desde entonces, y si no, el que llega.
+
+// sameValue = «dos valores iguales, como viajan»
+const sameValue = (one, other) => JSON.stringify(one ?? null) === JSON.stringify(other ?? null);
+
+// mergeFields = «juntar dos versiones de un objeto contra su base»: de cada campo, el de aquí si cambió desde la base
+const mergeFields = (base, local, incoming) => {
+    const merged = { ...incoming };
+    for (const key of new Set([...Object.keys(local), ...Object.keys(incoming)])) {
+        if (!sameValue(local[key], base[key])) merged[key] = local[key];
+    }
+    return merged;
+};
+
+// mergeList = «juntar dos versiones de una lista con id (procesos, toques) contra su base», en el orden de aquí:
+//      · en las dos              → campo a campo (mergeFields)
+//      · añadido aquí            → se queda;            añadido allí → entra, al final
+//      · quitado aquí            → fuera (aunque allí lo hayan tocado: la tablet lo resucitaría a cada lectura)
+//      · quitado allí            → fuera, salvo que aquí se haya cambiado: lo corregido aquí no se pierde
+export function mergeList(base = [], local = [], incoming = []) {
+    const baseOf = new Map(base.map(item => [item.id, item]));
+    const incomingOf = new Map(incoming.map(item => [item.id, item]));
+    const localIds = new Set(local.map(item => item.id));
+
+    const merged = [];
+    for (const item of local) {
+        const before = baseOf.get(item.id);
+        const remote = incomingOf.get(item.id);
+        if (remote) merged.push(before ? mergeFields(before, item, remote) : item);
+        else if (!before || !sameValue(item, before)) merged.push(item);
+    }
+    for (const item of incoming) {
+        if (!localIds.has(item.id) && !baseOf.has(item.id)) merged.push(item);
+    }
+    return merged;
+}
+
+// LIST_FIELDS = «los campos de una rotación que son listas con id»: se juntan elemento a elemento
+const LIST_FIELDS = ['process', 'touch'];
+
+// mergeRemote = «la rotación que queda al juntar lo que llega de la API con lo de aquí»
+//      base      lo último acordado con la API (lo último que subió bien o que llegó), como rotación de Mesas; null si
+//                no se sabe (recién abierto, con algo en la cola de antes): entonces vale lo que llega
+//      local     la de Mesas, ahora (undefined si aquí no está)
+//      incoming  la que llega, como rotación de Mesas (fromServerRotation)
+// Lo que no viaja (las listas desplegadas, el día) lo pone placeRemote desde la de aquí.
+export function mergeRemote(base, local, incoming) {
+    if (!base || !local) return incoming;
+
+    const merged = { ...incoming };
+    const keys = new Set([...Object.keys(shareable(local)), ...Object.keys(shareable(incoming))]);
+    for (const key of keys) {
+        if (key === 'id') continue;
+        if (LIST_FIELDS.includes(key)) merged[key] = mergeList(base[key], local[key], incoming[key]);
+        else if (!sameValue(local[key], base[key])) merged[key] = local[key];
+    }
+    return merged;
+}
+
+
 /*  planChanges = «lo que hay que subir después de un cambio en Mesas»
  *
  *  Recibe: records (las rotaciones, como quedaron), known (Map id → firma de lo último subido o llegado),
- *  outbox (la cola), establishmentId y now (milisegundos).
+ *  outbox (la cola), establishmentId, now (milisegundos) y floors (Map id → la hora de la última versión que se
+ *  sabe de cada rotación en la API: cada subida va después, stampAfter).
  *  Devuelve: { outbox, known }, los dos nuevos; la MISMA cola si no hay nada que subir.
  *
  *      · una rotación que se sube y cambió de firma   → subirla abierta, así
@@ -196,7 +279,7 @@ export function settle(outbox, recordId, at) {
  *      · una que se está cerrando (el disquete) no se quita: su cierre ya está en la cola
  *      · una que se quedó sin mesa un momento (se está corrigiendo) no se toca: vale la última subida
  */
-export function planChanges(records, known, outbox, establishmentId, now) {
+export function planChanges(records, known, outbox, establishmentId, now, floors = new Map()) {
     let nextOutbox = outbox;
     const nextKnown = new Map(known);
 
@@ -210,7 +293,8 @@ export function planChanges(records, known, outbox, establishmentId, now) {
         if (nextKnown.get(record.id) === signature) continue;
 
         nextKnown.set(record.id, signature);
-        nextOutbox = queueUpsert(nextOutbox, toSyncBody(record, establishmentId, 'open', now), now);
+        const at = stampAfter(now, floors.get(record.id));
+        nextOutbox = queueUpsert(nextOutbox, toSyncBody(record, establishmentId, 'open', at), at);
     }
 
     // tracked = «las que se subían»: las conocidas y las que esperan en la cola su primera subida
@@ -232,12 +316,17 @@ export function planChanges(records, known, outbox, establishmentId, now) {
 /*  remoteAction = «qué hacer con una rotación que llega de la API» (por el socket o al cargar)
  *
  *      'drop'    se guardó (aquí o en otro equipo): sale de Mesas
- *      'ignore'  aquí hay cambios sin subir de esa rotación (mandan ellos), o es lo mismo que ya hay
- *      'adopt'   entra en Mesas: es nueva aquí, o cambió en otro equipo
+ *      'ignore'  es más vieja que la última que se sabe de ella (un eco que llegó tarde), es lo mismo que ya hay, o
+ *                aquí hay cambios sin subir y no se sabe contra qué juntarlos (sin base: mandan los de aquí)
+ *      'adopt'   entra en Mesas, JUNTÁNDOSE con lo de aquí (mergeRemote): es nueva aquí, o cambió en otro equipo.
+ *                También con cambios sin subir, si hay base: así se guarda lo de los dos.
+ *
+ *  floor = la hora de la última versión que se sabe de esa rotación (stampOf); hasBase = se sabe lo último acordado.
  */
-export function remoteAction({ local, entry, rotation }) {
+export function remoteAction({ local, entry, rotation, floor = -Infinity, hasBase = false }) {
     if (rotation?.status === 'closed') return 'drop';
-    if (entry) return 'ignore';
+    if (stampOf(rotation) < floor) return 'ignore';
+    if (entry && !hasBase) return 'ignore';
     if (!local) return 'adopt';
     return syncSignature(local) === syncSignature(fromServerRotation(rotation)) ? 'ignore' : 'adopt';
 }

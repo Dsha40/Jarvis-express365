@@ -4,7 +4,7 @@ import { onRotationSync } from '../../../libs/socket/rotationEvents.js';
 import { onJarvisReconnect } from '../../../libs/socket/noveltyEvents.js';
 import {
     planChanges, toSyncBody, fromServerRotation, placeRemote, clearRemote, syncSignature, remoteAction,
-    queueUpsert, settle, isClosing, authorshipOf, readOutbox, writeOutbox,
+    queueUpsert, settle, isClosing, authorshipOf, readOutbox, writeOutbox, mergeRemote, stampOf, stampAfter,
 } from '../../../libs/tickets/rotationSync.js';
 
 
@@ -66,6 +66,15 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
     // knownRef = «la firma de lo último subido o llegado de cada rotación» (Map id → firma)
     const knownRef = useRef(new Map());
 
+    // baseRef = «lo último acordado con la API de cada rotación»: lo que subió bien o lo que llegó, como rotación de
+    // Mesas (Map id → rotación). Contra eso se junta lo que llega (mergeRemote): sin ello, la subida de otro equipo
+    // borraba lo recién escrito aquí.
+    const baseRef = useRef(new Map());
+
+    // floorRef = «la hora de la última versión que se sabe de cada rotación en la API» (Map id → milisegundos): cada
+    // subida va después (stampAfter), y un eco más viejo no se mira
+    const floorRef = useRef(new Map());
+
     // outboxRef = «la cola», la misma que se guarda en el equipo
     const outboxRef = useRef({});
 
@@ -114,19 +123,40 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
         });
     }, []);
 
-    // adopt = «poner en Mesas una rotación de la API» (de otro equipo, o la más nueva que tenía la API)
-    // Se apunta su firma ANTES de ponerla: así el registro no la vuelve a subir.
+    // learn = «apuntar cómo está una rotación en la API»: su base y su hora. Solo si no es más vieja que la que se sabe.
+    const learn = useCallback((rotation, withBase = true) => {
+        if (!rotation?.clientId) return;
+        const recordId = String(rotation.clientId);
+        const stamp = stampOf(rotation);
+        if (stamp < (floorRef.current.get(recordId) ?? -Infinity)) return;
+        if (Number.isFinite(stamp)) floorRef.current.set(recordId, stamp);
+        if (withBase) baseRef.current.set(recordId, fromServerRotation(rotation));
+    }, []);
+
+    // adopt = «poner en Mesas una rotación de la API» (de otro equipo, o la más nueva que tenía la API), JUNTADA con
+    // lo de aquí contra lo último acordado (mergeRemote): lo que aquí se escribió y no subió se queda. Se apunta la
+    // firma de lo que llega ANTES de ponerla: si lo juntado es igual, no se vuelve a subir; si aquí había algo más, sí.
     const adopt = useCallback((rotation) => {
         if (pausedRef.current) return;
-        const record = fromServerRotation(rotation);
-        knownRef.current.set(record.id, syncSignature(record));
-        applyRef.current(records => placeRemote(records, record));
-    }, []);
+        const incoming = fromServerRotation(rotation);
+        const base = baseRef.current.get(incoming.id) ?? null;
+        learn(rotation);
+        knownRef.current.set(incoming.id, syncSignature(incoming));
+        applyRef.current(records => {
+            const local = records.find(record => record.id === incoming.id);
+            const merged = mergeRemote(base, local, incoming);
+            //  Lo juntado es lo que ya hay aquí: nada que poner (la subida de lo de aquí ya está en la cola)
+            if (local && syncSignature(merged) === syncSignature(local)) return records;
+            return placeRemote(records, merged);
+        });
+    }, [learn]);
 
     // drop = «quitar de Mesas una rotación»: se guardó en otro equipo, o se quitó allí
     const drop = useCallback((recordId) => {
         if (pausedRef.current) return;
         knownRef.current.delete(recordId);
+        baseRef.current.delete(recordId);
+        floorRef.current.delete(recordId);
         applyRef.current(records => clearRemote(records, recordId));
     }, []);
 
@@ -173,7 +203,9 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
                     else {
                         const { outcome, rotation } = await syncRotation(entry.body);
                         remember(rotation);
-                        //  La API tenía una más nueva (de otro equipo): esa es la que vale
+                        //  Subió: eso es lo acordado con la API
+                        if ((outcome === 'create' || outcome === 'update') && rotation?.status === 'open') learn(rotation);
+                        //  La API tenía una más nueva (de otro equipo): se junta con lo de aquí, y lo de aquí vuelve a subir
                         if (outcome === 'stale' && rotation?.status === 'open') adopt(rotation);
                         if (rotation?.status === 'closed') onClosedRef.current?.(rotation);
                     }
@@ -242,7 +274,7 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
         //  Lo que entró mientras se subía va en la siguiente vuelta
         if (Object.keys(outboxRef.current).length > 0) schedule();
         else setStatus(current => ({ ...current, state: 'idle' }));
-    }, [saveOutbox, remember, forget, adopt, drop, schedule]);
+    }, [saveOutbox, remember, forget, adopt, drop, schedule, learn]);
 
     flushRef.current = flush;
 
@@ -251,7 +283,7 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
     const notify = useCallback((records) => {
         if (pausedRef.current || !localRef.current) return;
 
-        const { outbox, known } = planChanges(records, knownRef.current, outboxRef.current, localRef.current, Date.now());
+        const { outbox, known } = planChanges(records, knownRef.current, outboxRef.current, localRef.current, Date.now(), floorRef.current);
         knownRef.current = known;
         if (outbox === outboxRef.current) return;
 
@@ -264,7 +296,9 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
     const close = useCallback((record) => {
         if (!localRef.current) return false;
 
-        const now = Date.now();
+        //  Después de la última versión que se sabe de ella: si no, con otro equipo adelantado, el cierre llegaría
+        //  «atrasado» y no se guardaría
+        const now = stampAfter(Date.now(), floorRef.current.get(record.id));
         knownRef.current.delete(record.id);
         saveOutbox(queueUpsert(outboxRef.current, toSyncBody(record, localRef.current, 'closed', now), now));
         flushRef.current();
@@ -288,16 +322,21 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
 
         for (const rotation of rotations) {
             authorship.set(String(rotation.clientId), authorshipOf(rotation));
-            if (outbox[rotation.clientId]) continue;
+            //  Con algo en la cola mandan los de aquí; de la API solo se apunta su hora, para que la subida vaya después
+            if (outbox[rotation.clientId]) {
+                learn(rotation, false);
+                continue;
+            }
 
             const record = fromServerRotation(rotation);
+            learn(rotation);
             knownRef.current.set(record.id, syncSignature(record));
             records = placeRemote(records, record);
         }
 
         setPeople(authorship);
         if (records !== before) applyRef.current(() => records);
-    }, []);
+    }, [learn]);
 
 
     // receive = «lo que avisa el socket»: lo que sube o quita otro equipo del local (y el eco de lo nuestro)
@@ -317,7 +356,13 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
         remember(rotation);
 
         const local = getRecordsRef.current().find(record => record.id === recordId);
-        const decision = remoteAction({ local, entry, rotation });
+        const decision = remoteAction({
+            local,
+            entry,
+            rotation,
+            floor: floorRef.current.get(recordId) ?? -Infinity,
+            hasBase: baseRef.current.has(recordId),
+        });
 
         if (decision === 'drop') {
             //  Se guardó en otro equipo: lo que aquí esperaba para subirse abierto ya no vale. Un cierre nuestro
@@ -326,15 +371,22 @@ function useRotationSync({ establishmentId, getRecords, apply, paused }) {
             drop(recordId);
         }
         else if (decision === 'adopt') {
+            //  Se junta con lo de aquí (también con lo que espera en la cola): no se pierde lo de nadie
             adopt(rotation);
         }
-    }, [forget, drop, remember, adopt, saveOutbox]);
+        else {
+            //  Lo mismo que ya hay, o un eco atrasado (learn no apunta lo más viejo). Con cola, solo su hora.
+            learn(rotation, !entry);
+        }
+    }, [forget, drop, remember, adopt, saveOutbox, learn]);
 
 
     //  AL ABRIR, AL CAMBIAR DE LOCAL Y AL ACABAR UNA SIMULACIÓN: la cola de este local, las abiertas de la API, y a
     //  escuchar. El registro ya leyó del equipo las rotaciones de este local (su efecto va antes que este).
     useEffect(() => {
         knownRef.current = new Map();
+        baseRef.current = new Map();
+        floorRef.current = new Map();
         outboxRef.current = readOutbox(establishmentId);
         const ids = Object.keys(outboxRef.current);
         setPendingIds(new Set(ids));
