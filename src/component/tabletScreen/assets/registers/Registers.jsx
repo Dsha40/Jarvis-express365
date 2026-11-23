@@ -6,7 +6,6 @@ import ShiftToggle from './ShiftToggle.jsx';
 import ClearButton from './ClearButton.jsx';
 import RegisterTotals from './RegisterTotals.jsx';
 import SyncStatus from './SyncStatus.jsx';
-import ClockStatus from './ClockStatus.jsx';
 import RegisterEstablishment from './RegisterEstablishment.jsx';
 import RegisterTable from './RegisterTable.jsx';
 import RegisterSaved from './RegisterSaved.jsx';
@@ -14,6 +13,7 @@ import RegisterTabPanel from './RegisterTabPanel.jsx';
 import RegisterToolbar from './RegisterToolbar.jsx';
 import RegisterViewSummary from './RegisterViewSummary.jsx';
 import useOperationalDay from '../../hook/useOperationalDay.jsx';
+import { localOperationalDay } from '../../../../libs/date_time/operationalDay.js';
 import useStaleRotations from '../../hook/useStaleRotations.jsx';
 import useTableView from '../../hook/useTableView.jsx';
 
@@ -81,8 +81,8 @@ export default function Registers({ session, establishment = session.establishme
 
     // stale = «las rotaciones de Mesas de días operativos anteriores»: bloqueadas, arriba y aparte, solo para guardarlas
     // o eliminarlas (useStaleRotations; la tabla las pinta en RegisterStaleBlock). 'today' cambia solo a las 08:00.
-    const today = useOperationalDay();
-    const stale = useStaleRotations({ records: store.records, today, establishmentId, closeRecord: store.closeRecord, clearRecord: store.clearRecord });
+    const today = useOperationalDay(localOperationalDay);
+    const stale = useStaleRotations({ records: store.records, today, establishmentId, closeRecord: store.closeRecord, clearRecord: store.clearRecord, bringToToday: store.bringToToday });
     const addRecoveredHere = useCallback((fields) => addRecovered(fields, establishmentId), [addRecovered, establishmentId]);
 
     // tableView = «qué filas de Mesas se ven y en qué orden»: lo buscado, lo que se muestra y el orden de la barra de
@@ -106,9 +106,6 @@ export default function Registers({ session, establishment = session.establishme
                 {/*  Rotaciones y toques de gerente del día, sumando Registros y Mesas (pedido del usuario: en el
                      sitio de cómo iba la lectura de la IA, que ya se ve en el «Registro de la inferencia»)  */}
                 <RegisterTotals records={store.records} saved={saved} managers={managers} />
-
-                {/*  El reloj del equipo, solo si va desfasado: Mesas ya usa la hora del servidor, pero el equipo hay que arreglarlo  */}
-                <ClockStatus />
 
                 {/*  Cómo va la subida en vivo de Mesas: en vivo, subiendo, o sin conexión con cuántas sin subir  */}
                 <SyncStatus status={store.sync.status} />

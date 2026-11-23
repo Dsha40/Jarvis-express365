@@ -9,8 +9,12 @@ import { onClockOffset } from '../../../libs/date_time/serverClock.js';
  *  nada. Se mira cada minuto, como la lista de Registros (useSavedRotations): así también se pone al día un equipo
  *  que se despierta de la suspensión. Solo repinta cuando el día cambia de verdad.
  *
- *  «Ahora» es la hora del servidor (serverClock.js), y se vuelve a mirar en cuanto se mide: en un equipo con el reloj
- *  mal puesto, el primer pintado todavía no tiene la corrección.
+ *  Cada uno elige con qué reloj (dayOf):
+ *      localOperationalDay   Mesas: la hora de Windows, tal cual (pedido del usuario, 2026-11-14)
+ *      operationalDay        las tarjetas de bonos (la de por defecto): Caracas con la hora del servidor, como la API
+ *                            cuenta las novedades. Se vuelve a mirar en cuanto el servidor da la hora (onClockOffset).
+ *
+ *  @param {function} dayOf  (Date) → 'AAAA-MM-DD'. Una función fija (de módulo), no una que se cree en cada pintado.
  */
 
 
@@ -18,11 +22,11 @@ import { onClockOffset } from '../../../libs/date_time/serverClock.js';
 const CHECK_MS = 60 * 1000;
 
 
-export default function useOperationalDay() {
-    const [today, setToday] = useState(() => operationalDay());
+export default function useOperationalDay(dayOf = operationalDay) {
+    const [today, setToday] = useState(() => dayOf());
 
     useEffect(() => {
-        const check = () => setToday(operationalDay());
+        const check = () => setToday(dayOf());
         const timer = setInterval(check, CHECK_MS);
         const stopListening = onClockOffset(check);
         check();
@@ -30,7 +34,7 @@ export default function useOperationalDay() {
             clearInterval(timer);
             stopListening();
         };
-    }, []);
+    }, [dayOf]);
 
     return today;
 }

@@ -1,6 +1,5 @@
 import { createRecord, setRecordField, RECORD_TIMES, isTakeOut } from './tableRecords.js';
-import { atOperationalTime } from '../date_time/operationalDay.js';
-import { serverNow } from '../date_time/serverClock.js';
+import { atOperationalTime, localOperationalDay } from '../date_time/operationalDay.js';
 
 
 /*  UNA ROTACIÓN ANOTADA A MANO EN «REGISTROS»: RECUPERADA
@@ -11,8 +10,10 @@ import { serverNow } from '../date_time/serverClock.js';
  *      · recovered: true   la marca de lo que se anotó después de que pasara. También la llevan los toques
  *                          que se apuntan en Registros (addSavedTouch, en useSavedRotations).
  *      · su 'date'         no es el momento de escribirla, sino el de su Ocupa DENTRO DEL DÍA OPERATIVO que
- *                          enseña Registros (atOperationalTime): así la API la guarda en ese día, y una mesa
- *                          de las 02:00 es de la madrugada y no de la mañana.
+ *                          enseña Registros (atOperationalTime, con la hora de Windows): una mesa de las 02:00
+ *                          es de la madrugada y no de la mañana.
+ *      · su 'day'          ese día operativo, tal cual: la API la guarda en él sin recalcularlo con la hora de
+ *                          Caracas. Y 'today', el de hoy en el equipo, para su marca de abandonada.
  *
  *  Se arma como en Mesas (createRecord y setRecordField, de tableRecords.js), así que sigue sus reglas: una
  *  mesa '#14' es un pedido para llevar y nace con el proceso de su ticket.
@@ -38,7 +39,7 @@ export function recoveredMissing({ tableNumber, times = {} }) {
  *  @param {string} day          el día operativo de Registros, 'AAAA-MM-DD'
  *  @param {Date}   now          ahora (para las pruebas). Es la fecha de un pedido para llevar, que no tiene Ocupa.
  */
-export function recoveredRotation({ tableNumber, times = {}, shift, day, now = serverNow() }) {
+export function recoveredRotation({ tableNumber, times = {}, shift, day, now = new Date() }) {
 
     const blank = createRecord();
 
@@ -53,6 +54,8 @@ export function recoveredRotation({ tableNumber, times = {}, shift, day, now = s
         clientId: record.id,
         shift,
         date: record.hourOccupies ? atOperationalTime(day, record.hourOccupies) : now,
+        day,
+        today: localOperationalDay(now),
         recovered: true,
     };
 }

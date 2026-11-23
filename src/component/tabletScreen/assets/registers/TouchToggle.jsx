@@ -14,12 +14,17 @@
 /*  @param {number}   count     cuántos toques tiene la rotación
  *  @param {boolean}  open      la lista está abierta
  *  @param {boolean}  disabled  opcional. No se puede abrir; si no se dice, solo cuando no hay toques
+ *  @param {boolean}  readOnly  opcional. La lista es solo para mirar (la de una rotación de un día anterior): se abre
+ *                              siempre, también sin toques, para ver que no tiene ninguno
  *  @param {function} onToggle  abrirla o cerrarla
  */
-export default function TouchToggle({ count, open, disabled = count === 0, onToggle }) {
+export default function TouchToggle({ count, open, readOnly = false, disabled = count === 0 && !readOnly, onToggle }) {
 
     // what = «lo que hace el botón, dicho con palabras»
     const what = disabled ? 'Esta mesa todavía no tiene toques'
+        : readOnly ? (open ? 'Cerrar la lista de toques'
+            : count === 0 ? 'Ver los toques de esta mesa: no tiene ninguno'
+            : `Ver ${count === 1 ? 'el toque' : `los ${count} toques`} de esta mesa, sin poder cambiarlos`)
         : count === 0 ? `${open ? 'Cerrar' : 'Abrir'} la lista de toques, para apuntar uno a mano`
         : `${open ? 'Cerrar' : 'Ver'} ${count === 1 ? 'el toque' : `los ${count} toques`} de esta mesa`;
 
