@@ -225,7 +225,7 @@ function readTicketFields(object) {
 // cleanTicket = «limpiar un ticket»
 // Valida UN objeto del modelo y lo deja con la forma que espera el resto de la app.
 // Recibe: object (uno de los objetos del array).
-// Devuelve: { valid: true, ticket: { ticket, mesa, mesaFiable, tiempo, tipo, listo, canal, platos } }
+// Devuelve: { valid: true, ticket: { ticket, mesa, mesaFiable, tiempo, tipo, listo, pausa, canal, platos } }
 //        o  { valid: false, reason: 'el motivo, en español' }
 function cleanTicket(object) {
 
@@ -268,6 +268,9 @@ function cleanTicket(object) {
         tiempo: fields.timer,
         tipo: cleanText(object.tipo),
         listo: toBoolean(object.listo),
+        // true = la tarjeta dice HOLD o EN PAUSA: ese curso todavía no se disparó (ver followPause en processGrid.js).
+        // Un servidor que no lo manda da false, y todo sigue como antes.
+        pausa: toBoolean(object.pausa),
         canal: fields.canal,
         platos: cleanDishList(object.platos),
     };
@@ -282,7 +285,7 @@ function cleanTicket(object) {
 // Recibe: text (lo que contestó el modelo).
 // Devuelve: { readable, tickets, discarded }
 //   readable: false = ahí no había ningún array JSON: la vuelta se descarta entera
-//   tickets: [ { ticket: '118', mesa: '53', mesaFiable: true, tiempo: '3:04', tipo: 'Appetizer', listo: false, canal: '', platos: ['Tequeños'] } ]
+//   tickets: [ { ticket: '118', mesa: '53', mesaFiable: true, tiempo: '3:04', tipo: 'Appetizer', listo: false, pausa: false, canal: '', platos: ['Tequeños'] } ]
 //   discarded: [ { reason: 'el motivo, en español', object: {…lo que dijo el modelo} } ]
 function parseModelResponse(text) {
 

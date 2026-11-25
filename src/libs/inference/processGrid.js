@@ -1,9 +1,11 @@
-import { aSegundosDeCronometro, aTexto } from '../tickets/cronometro.js';
+import { aSegundosDeCronometro, aTexto, bandaPorEspera } from '../tickets/cronometro.js';
 import { cursoDeTarjeta, esMesaDeVerdad } from '../tickets/claveDeTicket.js';
 
 
 // DE DÓNDE SALE CADA HORA DE LA PARRILLA DE PROCESOS
 //   Toma de orden    = reloj de la tablet − cronómetro de la tarjeta. Se vota (ver voteOrderTime).
+//                      Un curso que estuvo EN PAUSA (HOLD) no tiene fila mientras dure la pausa, y su toma de
+//                      orden es cuando se disparó (ver followPause).
 //   Listo en tablet  = lo PRIMERO que ocurra: se le ve ponerse verde (stampReadyIfChanged)
 //                      o desaparece de la pantalla (countAbsence).
 //   Cada lectura mira la pantalla ENTERA: lo que no sale en una lectura no está en pantalla, o el modelo no lo vio.
@@ -50,6 +52,14 @@ const CENSUS_READINGS = 1;
 
 // MAX_ORDER_TIME_VOTES = «máximo de votos de la toma de orden»
 const MAX_ORDER_TIME_VOTES = 5;
+
+// FIRE_READINGS_TO_CONFIRM = «cuántas lecturas seguidas SIN pausa hacen falta para creerse que lo dispararon»
+// Una sola puede ser el modelo que no vio el HOLD esa vez. Con dos, vale la hora de la primera: no se pierde nada.
+const FIRE_READINGS_TO_CONFIRM = 2;
+
+// PAUSE_MEMORY_READINGS = «cuántas lecturas se recuerda una tarjeta en pausa que ya no sale en pantalla»
+// Unos 4 minutos. Más, y un número que vuelva otro día (otro pedido) se tomaría por el que estaba en pausa.
+const PAUSE_MEMORY_READINGS = 300;
 
 // SECONDS_PER_DAY = «segundos de un día»
 const SECONDS_PER_DAY = 86400;
@@ -120,6 +130,10 @@ function createEmptyRow(clave) {
         // (ver countDishes). 'platos' son los ya confirmados: de ellos sale la categoría (catalogoDePlatos.js).
         platosVistos: [],
         platos: [],
+
+        // el reloj de la tablet, en segundos, cuando se disparó tras una pausa (null = nunca estuvo en pausa).
+        // Con él, cada lectura se mide desde que se disparó y no desde la toma de orden (ver timedFromFire).
+        disparadaEn: null,
     };
 }
 
@@ -163,7 +177,7 @@ function countDishes(row, dishes) {
 
 // createEmptyGrid = «crear la parrilla vacía»
 // La parrilla antes de la primera lectura.
-// Devuelve: { rows, alreadyThere, readingsCount, census, connectionSeconds, lastTickets }
+// Devuelve: { rows, alreadyThere, enPausa, readingsCount, census, connectionSeconds, lastTickets }
 function createEmptyGrid() {
     return {
         // rows = «las filas»: Map clave → fila. Un pedido que termina NO se borra: se marca cerrado.
@@ -171,6 +185,10 @@ function createEmptyGrid() {
 
         // alreadyThere = «los que ya estaban»: las claves que el censo apartó al conectar
         alreadyThere: new Set(),
+
+        // enPausa = «las tarjetas en pausa (HOLD)»: Map clave → { vistaEn, salida, lecturasSinPausa }.
+        // No tienen fila todavía: esperan a que las disparen (ver followPause).
+        enPausa: new Map(),
 
         // readingsCount = «cuántas lecturas buenas van». Fecha los cierres ('cerradoEn').
         readingsCount: 0,
@@ -195,6 +213,8 @@ function copyGrid(grid) {
     return {
         rows: new Map(grid.rows),
         alreadyThere: new Set(grid.alreadyThere),
+        // '?? []': una parrilla de antes de este campo (recarga en caliente) no lo trae
+        enPausa: new Map(grid.enPausa ?? []),
         readingsCount: grid.readingsCount,
         census: { ...grid.census },
         connectionSeconds: grid.connectionSeconds,
@@ -486,6 +506,71 @@ function getOrderTimeVote(ticket, tabletTime) {
     if (!clockSeconds) return null;
 
     return clockSeconds - waitSeconds;
+}
+
+
+
+// isFollowed = «esa clave ya tiene un pedido abierto»
+const isFollowed = (rows, clave) => rows.has(clave) && rows.get(clave).cerrado !== true;
+
+
+
+// followPause = «seguir la pausa de una tarjeta» (HOLD o EN PAUSA en la tablet; pedido del usuario)
+// UN CURSO EN PAUSA TODAVÍA NO EMPEZÓ. El cronómetro de la cabecera corre desde la toma de orden, también durante
+// la pausa: visto en la tablet, el postre retenido del #95 marcaba lo mismo que su plato fuerte ya disparado
+// (15:11). Medido así, llegaba a la parrilla con toda la pausa encima. Así que la tarjeta en pausa se aparta —ni
+// fila, ni hora, ni censo— y su hora empieza cuando se dispara.
+// Se cree que se disparó cuando FIRE_READINGS_TO_CONFIRM lecturas seguidas la traen sin pausa, y vale el reloj de
+// la PRIMERA. Una lectura en la que no sale (tapada, cortada) no rompe la racha; una que vuelve a decir pausa, sí.
+// Recibe: pending (lo apuntado de esa tarjeta, o undefined si nunca se la vio en pausa), ticket (leído AHORA),
+//         clockSeconds (el reloj de esta lectura) y readingsCount (el número de esta lectura).
+// Devuelve: { pending, waiting, firedAt }
+//   pending   lo que queda apuntado: un objeto, null para borrarlo, o undefined si no hay nada que cambiar
+//   waiting   true = esta lectura no se sigue: está en pausa, o se está confirmando que la dispararon
+//   firedAt   el reloj, en segundos, en que se disparó; null si no acaba de salir de una pausa
+function followPause(pending, ticket, clockSeconds, readingsCount) {
+
+    // 1. En pausa: se apunta, y una salida a medias se olvida (fue el modelo, que no vio el HOLD)
+    if (ticket.pausa === true) {
+        return { pending: { vistaEn: readingsCount, salida: 0, lecturasSinPausa: 0 }, waiting: true, firedAt: null };
+    }
+
+    // 2. Sin pausa, y nunca se la vio en pausa: esta regla no va con ella
+    if (!pending) return { pending: undefined, waiting: false, firedAt: null };
+
+    // 3. Sin pausa después de verla en pausa: la dispararon, o el modelo no vio el HOLD esta vez
+    // salida = «el reloj en la primera lectura sin pausa» (0 = todavía no se sabe)
+    const salida = pending.salida || clockSeconds;
+
+    // lecturasSinPausa = «cuántas lecturas seguidas la traen sin pausa»
+    const lecturasSinPausa = pending.lecturasSinPausa + 1;
+
+    if (lecturasSinPausa < FIRE_READINGS_TO_CONFIRM || !salida) {
+        return { pending: { vistaEn: readingsCount, salida, lecturasSinPausa }, waiting: true, firedAt: null };
+    }
+
+    return { pending: null, waiting: false, firedAt: salida };
+}
+
+
+
+// timedFromFire = «la lectura, medida desde que se disparó»
+// Para un curso que estuvo en pausa, el cronómetro de la cabecera (desde la toma de orden) se cambia por lo que
+// lleva desde que se disparó, que es lo que cuenta el FIRE de su tarjeta. Con él salen bien la toma de orden
+// (reloj − cronómetro = el disparo), el tiempo de vida y el color.
+// Recibe: ticket (leído AHORA), firedAt (el reloj al dispararse) y clockSeconds (el de ahora), en segundos.
+// Devuelve: una copia del ticket con su cronómetro y su color corregidos.
+function timedFromFire(ticket, firedAt, clockSeconds) {
+
+    if (!clockSeconds) return ticket;
+
+    // sinceFire = «lo que lleva desde que se disparó». Con la vuelta del día, por si cruza la medianoche.
+    const sinceFire = (clockSeconds - firedAt + SECONDS_PER_DAY) % SECONDS_PER_DAY;
+
+    // color = «la alarma de edad», como la saca screenTickets.js, pero con la edad buena
+    const color = bandaPorEspera(sinceFire);
+
+    return { ...ticket, tiempo: aTexto(sinceFire), color, rojo: color === 'rojo' };
 }
 
 
@@ -807,12 +892,16 @@ function updateProcessGrid(grid, reading, context) {
     // secondsWatching = «los segundos que llevamos mirando»
     const secondsWatching = getSecondsWatching(newGrid.connectionSeconds, clockNow);
 
+    // nowSeconds = «la hora de esta lectura, en segundos»: la de la tablet, o la del equipo si ADB no contestó
+    const nowSeconds = getClockSeconds(now);
+
 
     // 5. COMPARA cada ticket leído con su fila
     // seenNow = «los que se han visto ahora»
     const seenNow = new Set();
 
-    for (const ticket of reading.tickets) {
+    //  'let': el de un curso que salió de una pausa se cambia por el medido desde que lo dispararon (timedFromFire)
+    for (let ticket of reading.tickets) {
 
         // La clave la fabricó updateScreenTickets. Sin ella no hay a qué fila atribuir lo leído.
         // leidaClave = «la clave tal como vino»
@@ -830,7 +919,24 @@ function updateProcessGrid(grid, reading, context) {
         // identityIsTrusted = «el número y la mesa de esta lectura son de fiar»
         let identityIsTrusted = true;
 
-        if (!newGrid.rows.has(clave) && !newGrid.alreadyThere.has(clave)) {
+        // 5.0 EN PAUSA (HOLD): ese curso todavía no se disparó, y se aparta hasta que lo disparen (followPause).
+        //     Solo si esa clave no tiene ya un pedido abierto: lo que ya se sigue, se sigue como siempre.
+        // firedAt = «el reloj al dispararse», en segundos (null = no acaba de salir de una pausa)
+        let firedAt = null;
+
+        if (!isFollowed(newGrid.rows, clave) && !newGrid.alreadyThere.has(clave)) {
+            // pause = «lo que dice la regla de la pausa»
+            const pause = followPause(newGrid.enPausa.get(clave), ticket, nowSeconds, newGrid.readingsCount);
+
+            if (pause.pending === null) newGrid.enPausa.delete(clave);
+            else if (pause.pending) newGrid.enPausa.set(clave, pause.pending);
+
+            if (pause.waiting) continue;
+            firedAt = pause.firedAt;
+        }
+
+        //  Uno que acaba de salir de su pausa no se busca por la hora: se le ha seguido con esta misma clave.
+        if (firedAt === null && !newGrid.rows.has(clave) && !newGrid.alreadyThere.has(clave)) {
             // voto = «la toma de orden que dice esta lectura», en segundos
             const voto = getOrderTimeVote(ticket, reading.hora);
 
@@ -870,14 +976,19 @@ function updateProcessGrid(grid, reading, context) {
         // row = «la fila del pedido»: la que ya había, o una nueva
         let row = newGrid.rows.get(clave) ?? { ...createEmptyRow(clave), fundadaFloja: foundsWeak };
 
-        // 5.2 Vuelve a aparecer: ¿el mismo pedido, u otro?
-        if (wasClosedLongAgo(row, newGrid.readingsCount)) {
+        // 5.2 Vuelve a aparecer: ¿el mismo pedido, u otro? Uno que sale de una pausa sobre una fila cerrada es
+        //     siempre otro: un curso ya disparado no vuelve a quedar en pausa.
+        if (wasClosedLongAgo(row, newGrid.readingsCount) || (firedAt !== null && row.cerrado)) {
             // archivedRow = «la fila archivada»
             const archivedRow = archiveRow(row);
             newGrid.rows.set(archivedRow.clave, archivedRow);
 
             row = startNewOrder(row);
         }
+
+        //  Salió de una pausa: desde ahora, esta lectura y todas las que vengan se miden desde que lo dispararon.
+        if (firedAt !== null) row = { ...row, disparadaEn: firedAt };
+        if (row.disparadaEn !== null && row.disparadaEn !== undefined) ticket = timedFromFire(ticket, row.disparadaEn, nowSeconds);
 
         // 5.3 Está en pantalla: se reabre, se refrescan sus datos y se resuelve su tipo
         row = reopenIfBack(row);
@@ -911,6 +1022,12 @@ function updateProcessGrid(grid, reading, context) {
         }
 
         newGrid.rows.set(clave, absentRow);
+    }
+
+
+    // 7. Las tarjetas en pausa que hace rato que no salen en pantalla se olvidan
+    for (const [clave, pending] of newGrid.enPausa) {
+        if (newGrid.readingsCount - pending.vistaEn > PAUSE_MEMORY_READINGS) newGrid.enPausa.delete(clave);
     }
 
     return newGrid;
