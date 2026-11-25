@@ -161,6 +161,29 @@ function toBoolean(value) {
 
 
 
+// cleanDishList = «limpiar la lista de platos»
+// Recibe: value (lo que vino en 'platos'). Lo pedido al servidor es un array de textos (["1/2 Chicken", "Tostones"]),
+// pero se aguanta también { nombre } / { name }, o un texto separado por comas. Sin 'platos' —un servidor que
+// todavía no lo manda— es [].
+// Devuelve: los nombres, sin la cantidad delante ('2 Tequeños', '2x Tequeños' → 'Tequeños') y sin repetir.
+function cleanDishList(value) {
+
+    // items = «lo que vino, como lista»
+    const items = Array.isArray(value) ? value : (typeof value === 'string' ? value.split(',') : []);
+
+    // names = «los nombres limpios»
+    const names = [];
+    for (const item of items) {
+        const raw = typeof item === 'object' && item !== null ? (item.nombre ?? item.name) : item;
+        const name = cleanText(raw).replace(/^\d+\s*x?\s+/i, '');
+        if (name && !names.some(known => known.toLowerCase() === name.toLowerCase())) names.push(name);
+    }
+
+    return names;
+}
+
+
+
 // isScreenLabel = «es un rótulo de la pantalla»
 // FIRE, HOLD, ENTREE, TAKE OUT… son palabras que pinta la pantalla: nunca son una mesa.
 const isScreenLabel = (value) => {
@@ -202,7 +225,7 @@ function readTicketFields(object) {
 // cleanTicket = «limpiar un ticket»
 // Valida UN objeto del modelo y lo deja con la forma que espera el resto de la app.
 // Recibe: object (uno de los objetos del array).
-// Devuelve: { valid: true, ticket: { ticket, mesa, mesaFiable, tiempo, tipo, listo, canal } }
+// Devuelve: { valid: true, ticket: { ticket, mesa, mesaFiable, tiempo, tipo, listo, canal, platos } }
 //        o  { valid: false, reason: 'el motivo, en español' }
 function cleanTicket(object) {
 
@@ -246,6 +269,7 @@ function cleanTicket(object) {
         tipo: cleanText(object.tipo),
         listo: toBoolean(object.listo),
         canal: fields.canal,
+        platos: cleanDishList(object.platos),
     };
 
     return { valid: true, ticket };
@@ -258,7 +282,7 @@ function cleanTicket(object) {
 // Recibe: text (lo que contestó el modelo).
 // Devuelve: { readable, tickets, discarded }
 //   readable: false = ahí no había ningún array JSON: la vuelta se descarta entera
-//   tickets: [ { ticket: '118', mesa: '53', mesaFiable: true, tiempo: '3:04', tipo: 'Appetizer', listo: false, canal: '' } ]
+//   tickets: [ { ticket: '118', mesa: '53', mesaFiable: true, tiempo: '3:04', tipo: 'Appetizer', listo: false, canal: '', platos: ['Tequeños'] } ]
 //   discarded: [ { reason: 'el motivo, en español', object: {…lo que dijo el modelo} } ]
 function parseModelResponse(text) {
 

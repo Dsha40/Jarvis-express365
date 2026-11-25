@@ -115,6 +115,47 @@ function createEmptyRow(clave) {
 
         // el canal del pedido (Online Ordering…): no se pinta, ayuda a resolver el tipo
         canal: '',
+
+        // los platos que se le han leído, en el orden en que aparecieron: [{ clave, nombre, veces }]
+        // (ver countDishes). 'platos' son los ya confirmados: de ellos sale la categoría (catalogoDePlatos.js).
+        platosVistos: [],
+        platos: [],
+    };
+}
+
+
+
+// DISH_SIGHTINGS_TO_CONFIRM = «cuántas lecturas tienen que traer un plato para creérselo»
+// Una sola lectura rara del OCR no sube el pedido a una categoría que no le toca.
+const DISH_SIGHTINGS_TO_CONFIRM = 2;
+
+
+
+// countDishes = «apuntar los platos de esta lectura»
+// LOS PLATOS SE ACUMULAN: que una lectura no traiga uno (tapado, cortado) no lo borra, y uno agregado tarde al
+// pedido se suma. Como solo se suman, la categoría que sale de ellos solo puede subir, nunca bajar.
+// Se CONGELAN al quedar listo: lo que se lea después ya no cambia con qué tiempo se midió.
+// Recibe: row y dishes (los nombres de esta lectura, de parseModelResponse).
+function countDishes(row, dishes) {
+
+    if (row.listoTablet || !Array.isArray(dishes) || dishes.length === 0) return row;
+
+    // seen = «los platos vistos, en copia»
+    const seen = (row.platosVistos ?? []).map(dish => ({ ...dish }));
+
+    for (const name of dishes) {
+        const clave = String(name).trim().toLowerCase();
+        if (!clave) continue;
+
+        const known = seen.find(dish => dish.clave === clave);
+        if (known) known.veces++;
+        else seen.push({ clave, nombre: String(name).trim(), veces: 1 });
+    }
+
+    return {
+        ...row,
+        platosVistos: seen,
+        platos: seen.filter(dish => dish.veces >= DISH_SIGHTINGS_TO_CONFIRM).map(dish => dish.nombre),
     };
 }
 
@@ -842,6 +883,7 @@ function updateProcessGrid(grid, reading, context) {
         row = reopenIfBack(row);
         row = refreshRowData(row, ticket, identityIsTrusted);
         row = resolveRowType(row, ticket.tipo, context.resolveType);
+        if (identityIsTrusted) row = countDishes(row, ticket.platos);
 
         // 5.4 Las horas, y se apunta que se la ha visto
         row = voteOrderTime(row, ticket, reading.hora);
@@ -891,7 +933,7 @@ function getGridRows(grid) {
         //  lectura las confirme o a desaparecer sin dejar rastro.
         if (!row.confirmada) continue;
 
-        rows.push({ ...row, candidatosTomaOrden: [...row.candidatosTomaOrden] });
+        rows.push({ ...row, candidatosTomaOrden: [...row.candidatosTomaOrden], platosVistos: (row.platosVistos ?? []).map(dish => ({ ...dish })), platos: [...(row.platos ?? [])] });
     }
 
     rows.sort((una, otra) => una.tomaOrdenSegundos - otra.tomaOrdenSegundos);

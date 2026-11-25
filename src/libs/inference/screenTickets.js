@@ -66,7 +66,7 @@ function chooseTable(ticket, previous) {
 // buildScreenTicket = «armar el ticket de la pantalla»
 // Deja un ticket con la forma que espera la parrilla.
 // Recibe: ticket (el recién leído), clave y previous (como estaba en la lectura anterior, o undefined).
-// Devuelve: { clave, mesa, mesaFiable, ticket, tiempo, tipo, plato, canal, listo, color, rojo }
+// Devuelve: { clave, mesa, mesaFiable, ticket, tiempo, tipo, plato, platos, canal, listo, color, rojo }
 function buildScreenTicket(ticket, clave, previous) {
 
     // table = «la mesa elegida»
@@ -86,6 +86,7 @@ function buildScreenTicket(ticket, clave, previous) {
         tiempo: ticket.tiempo,
         tipo: ticket.tipo,
         plato: '',
+        platos: Array.isArray(ticket.platos) ? ticket.platos : [],
         canal: ticket.canal,
         listo: ticket.listo === true,
         color: color,
