@@ -1,6 +1,8 @@
 import Fuse from 'fuse.js';
 import { isConfiguredLimit } from '../date_time/timeLimit.js';
 import { clockDuration } from '../date_time/waitingTime.js';
+import { aSegundosDeCronometro } from './cronometro.js';
+import { crearBuscadorDePlatos, categoriaDelPedido, normalizar } from './catalogoDePlatos.js';
 
 
 /*  EL «TIPO DE PLATO» DE UN PROCESO: SUS OPCIONES, Y CÓMO ELIGE LA IA (pedido del usuario)
@@ -70,6 +72,9 @@ export function dishLimit(dish, shift) {
 /*  createDishTypes = «el tipo de plato de un local»
  *
  *  Recibe: dishes, la carta del local (establishment.dishes, poblada).
+ *          catalogo (opcional), qué categoría de la carta es cada plato (catalogoDePlatos.js). Con él, y si la
+ *          lectura trae los platos del ticket ('platos'), el tipo es la categoría de más tiempo entre ellos.
+ *          Sin catálogo o sin platos, como siempre: por el nombre leído en 'plato'.
  *  Devuelve: { options, fromMenu, fromOrder, dishOf, limitOf }
  *      options              las opciones del select: los nombres de la carta, o DISH_TYPES si no tiene
  *      fromMenu             las opciones salen de la carta del local
@@ -79,7 +84,7 @@ export function dishLimit(dish, shift) {
  *
  *  Se crea una vez por carta: montar el índice de búsqueda cuesta.
  */
-export function createDishTypes(dishes) {
+export function createDishTypes(dishes, catalogo = []) {
 
     const names = dishNames(dishes);
 
@@ -102,7 +107,23 @@ export function createDishTypes(dishes) {
     // found = «lo ya buscado», por lo leído: la IA manda los mismos pedidos en cada lectura
     const found = new Map();
 
+    //  POR LOS PLATOS DEL TICKET (catalogoDePlatos.js). La categoría del catálogo se pasa a su opción de la carta
+    //  sin mirar mayúsculas ni acentos ('Plato Fuerte' en la carta es 'plato fuerte' en el catálogo).
+    const optionByName = new Map(names.map(name => [normalizar(name), name]));
+    const findDish = crearBuscadorDePlatos(catalogo);
+
+    // secondsOf = «cuánto le da la carta a una categoría», en segundos. El de día: es el que se compara.
+    const secondsOf = (category) => aSegundosDeCronometro(limitOf(optionByName.get(normalizar(category)), 'day')) ?? 0;
+
+    const fromDishes = (order) => {
+        const { categoria } = categoriaDelPedido(order?.platos, findDish, secondsOf);
+        return optionByName.get(normalizar(categoria)) ?? '';
+    };
+
     const fromOrder = (order) => {
+        const byDishes = fromDishes(order);
+        if (byDishes) return byDishes;
+
         const read = String(order?.plato ?? '').trim();
         if (!read) return '';
         if (!found.has(read)) found.set(read, search.search(read)[0]?.item ?? '');

@@ -20,6 +20,7 @@ import { limitesDelLocal } from '../../../libs/limites/limitesDelLocal.js';
 import { useTimeServices } from './useTimeServices.jsx';
 import { useDishes } from './useDishes.jsx';
 import { createDishTypes } from '../../../libs/tickets/dishTypes.js';
+import { catalogoDelLocal } from '../../../libs/tickets/catalogoDePlatos.js';
 import { shiftOfTime } from '../../../libs/date_time/operationalDay.js';
 
 
@@ -120,7 +121,9 @@ function useTabletSession({ onReportDelay, establishmentName, attentionLimit } =
     //  La carta del local (useDishes): de ella salen las opciones del «Tipo de plato» de Mesas y Registros, y con
     //  ella elige la IA el de cada pedido. Sin platos, la lista de siempre (dishTypes.js).
     const dishes = useDishes(establishment?._id);
-    const dishTypes = useMemo(() => createDishTypes(dishes), [dishes]);
+    //  Con el catálogo del local (catalogoDePlatos.js), el tipo sale de los platos que lee la IA en cada ticket.
+    const catalogo = catalogoDelLocal(establishment?._id);
+    const dishTypes = useMemo(() => createDishTypes(dishes, catalogo), [dishes, catalogo]);
 
     // attentionOrigin / cleaningOrigin = «de dónde sale cada tiempo de referencia»: 'local' (lo configurado en el
     // local), 'lista' (la lista de nombres, porque el local no lo tiene) o 'fijo' (lo pasó quien monta la sesión).
