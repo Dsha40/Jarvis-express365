@@ -7,8 +7,10 @@
  *  que se llena o no. Este cuaderno apunta cada paso para poder verlos uno a uno en el
  *  panel lateral de la ventana de la tablet (InferencePanel.jsx).
  *
- *  SOLO EXISTE EN DESARROLLO. Con la aplicación publicada el cuaderno está cerrado:
- *  'apuntar' no guarda nada y el panel ni siquiera se carga.
+ *  ESTÁ SIEMPRE ABIERTO, en desarrollo y en la aplicación publicada (pedido del usuario):
+ *  así se ve lo que se manda al servidor y lo que contesta también en el equipo del
+ *  operador. Se cierra con REGISTRO_ACTIVO = false: 'apuntar' deja de guardar y el panel
+ *  ni siquiera se carga.
  *
  *  CÓMO ESTÁ HECHO. Es un almacén mínimo con el patrón de siempre: una lista, una forma
  *  de añadirle cosas y una forma de enterarse de que ha cambiado ('suscribir'). React lo
@@ -20,12 +22,11 @@
 
 /*  ¿Está abierto el cuaderno?
  *
- *  Se mira MODE y no DEV a propósito: 'npm run dev' arranca con NODE_ENV=production, y
- *  con eso Vite pone DEV en false aunque se esté desarrollando. MODE sí dice la verdad.
- *  El '?.' es para poder importar este archivo desde Node, en las pruebas, donde
- *  'import.meta.env' no existe.
+ *  Siempre. Antes solo en desarrollo (import.meta.env.MODE === 'development'); ahora es lo
+ *  estándar también en la publicada. Guarda texto y no imágenes, con el tope de
+ *  MAXIMO_DE_APUNTES: pasar horas abierta no se come la memoria.
  */
-export const REGISTRO_ACTIVO = import.meta.env?.MODE === 'development';
+export const REGISTRO_ACTIVO = true;
 
 
 /*  Las clases de apunte. Cada una es un paso distinto de la lectura, y el panel le da
@@ -133,7 +134,7 @@ export function crearRegistro({ activo = true, maximo = MAXIMO_DE_APUNTES } = {}
 
 
 //  EL cuaderno de la aplicación: uno solo, compartido por quien apunta (los hooks de la ventana) y
-//  por quien lee (el panel). Fuera de desarrollo nace cerrado.
+//  por quien lee (el panel). Abierto o cerrado según REGISTRO_ACTIVO.
 export const registroDeInferencia = crearRegistro({ activo: REGISTRO_ACTIVO });
 
 

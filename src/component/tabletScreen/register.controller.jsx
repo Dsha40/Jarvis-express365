@@ -62,16 +62,16 @@ import Registers from './assets/registers/Registers.jsx';
  *      MirrorPanel      el espejo de la tablet: barra de título, imagen y zoom
  *      Splitter         el divisor que se arrastra para repartir el alto
  *      RegisterPanel    el registro: las mesas y, dentro de cada una, sus procesos (pedidos)
- *      InferencePanel   a la derecha y solo en desarrollo: el registro de la inferencia
+ *      InferencePanel   a la derecha: el registro de la inferencia
  *  ══════════════════════════════════════════════════════════════════════════════════════ */
 
 
 
-/*  EL PANEL DEL REGISTRO DE LA INFERENCIA — solo en desarrollo
+/*  EL PANEL DEL REGISTRO DE LA INFERENCIA
  *
- *  Se carga con import() y detrás de la constante: en la aplicación publicada 'REGISTRO_ACTIVO' es
- *  false, Vite ve que esta rama no se alcanza nunca y ni el panel ni su hoja de estilos entran en
- *  el paquete.
+ *  Se carga con import() y detrás de la constante: hoy 'REGISTRO_ACTIVO' es true siempre, también en
+ *  la aplicación publicada. Si algún día se pone en false, Vite ve que esta rama no se alcanza nunca y
+ *  ni el panel ni su hoja de estilos entran en el paquete.
  */
 const InferencePanel = REGISTRO_ACTIVO ? lazy(() => import('./assets/inference/InferencePanel.jsx')) : null;
 

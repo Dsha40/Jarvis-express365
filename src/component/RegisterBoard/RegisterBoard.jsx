@@ -15,11 +15,11 @@ import { REGISTRO_ACTIVO } from '../../libs/tickets/registroDeInferencia.js';
  *  Donde aquí no hay tablet —en el teléfono, o con la tablet fuera en su ventana— el centro enseña
  *  lo de siempre, la bienvenida, que llega en 'fallback'.
  *
- *  En desarrollo va además, a la derecha, el registro de la inferencia, igual que en la flotante.
+ *  A la derecha va además el registro de la inferencia, igual que en la flotante.
  */
 
 
-//  Igual que en register.controller.jsx: con 'REGISTRO_ACTIVO' en false, el panel ni entra en el paquete.
+//  Igual que en register.controller.jsx: hoy siempre; con 'REGISTRO_ACTIVO' en false, el panel ni entra en el paquete.
 const InferencePanel = REGISTRO_ACTIVO ? lazy(() => import('../tabletScreen/assets/inference/InferencePanel.jsx')) : null;
 
 
